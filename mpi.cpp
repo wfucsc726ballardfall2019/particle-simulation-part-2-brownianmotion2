@@ -9,6 +9,9 @@
 //
 //  benchmarking program
 //
+
+
+
 int main( int argc, char **argv )
 {    
     int navg, nabsavg=0;
@@ -50,6 +53,12 @@ int main( int argc, char **argv )
 
 
     particle_t *particles = (particle_t*) malloc( n * sizeof(particle_t) );
+    particle_t *particles_out = (particle_t*) malloc( n * sizeof(particle_t) );
+    particle_t *particles_in = (particle_t*) malloc( n * sizeof(particle_t) );
+    particle_t *particles_comm = (particle_t*) malloc( n * sizeof(particle_t) );
+    int *particleid_out = (int*) malloc( n * sizeof(int) );
+    int *particleid_in = (int*) malloc( n * sizeof(int) );
+    int *particleid_comm = (int*) malloc( n * sizeof(int) );;
     
     MPI_Datatype PARTICLE;
     MPI_Type_contiguous( 6, MPI_DOUBLE, &PARTICLE );
@@ -102,7 +111,7 @@ int main( int argc, char **argv )
           y_sizes[i] = bucket_per_proc;
         }
 }
-    
+
     int nlocal = partition_sizes[rank];
     particle_t *local = (particle_t*) malloc( nlocal * sizeof(particle_t) );
     
@@ -142,6 +151,7 @@ int main( int argc, char **argv )
 
 
 //apply forces to our part
+
   
     for( int xbucket = x_offsets[rank]; xbucket < x_offsets[rank]+x_sizes[rank]; xbucket ++){
      for( int ybucket = y_offsets[rank]; ybucket < y_offsets[rank]+y_sizes[rank]; ybucket ++){
@@ -164,6 +174,7 @@ int main( int argc, char **argv )
                         for( int nbuckety = ymin; nbuckety <= ymax; nbuckety++){
                             for(int l = 0; l < bucket_to_particle[xbucket+nbucketx][ybucket+nbuckety].size(); l++){
                               apply_force(particles[i], particles[bucket_to_particle[xbucket + nbucketx][ybucket + nbuckety].at(l)], &dmin, &davg, &navg);
+                              
                             }
                         }
                     }
@@ -171,7 +182,7 @@ int main( int argc, char **argv )
      }
     }
     
-
+    
     // printf("1: %f\n",read_timer()-temp);
     // temp = read_timer();
 
@@ -184,7 +195,7 @@ int main( int argc, char **argv )
         
       }}}
 
-    // printf("2: %f\n",read_timer()-temp);
+    // printf("9: %f\n",read_timer()-temp);
     // temp = read_timer();
 
 
@@ -196,95 +207,133 @@ int main( int argc, char **argv )
       }
     } 
 
-// printf("3: %f\n",read_timer()-temp);
+// printf("8: %f\n",read_timer()-temp);
 //     temp = read_timer();
 
 
-  
-  
-    for(int sender_rank = 0; sender_rank<n_proc; sender_rank ++){
-            int ybucket = y_offsets[sender_rank];
-            for(int xbucket = x_offsets[sender_rank];  xbucket < x_offsets[sender_rank] + x_sizes[sender_rank]; xbucket++){
-              
-              int num_to_send = bucket_to_particle[xbucket][ybucket].size();
-              MPI_Bcast(&num_to_send,1,MPI_INT,sender_rank,MPI_COMM_WORLD);
-              for(int k = 0; k < num_to_send; k++){
-                int pid;
-                if(rank == sender_rank)
-                pid = bucket_to_particle[xbucket][ybucket].at(k);
-                MPI_Bcast(&pid,1,MPI_INT,sender_rank,MPI_COMM_WORLD);
-              MPI_Bcast(&particles[pid],1,PARTICLE,sender_rank,MPI_COMM_WORLD);
-              int new_xbucket = floor(particles[pid].x / (0.01));
-                int new_ybucket = floor(particles[pid].y / (0.01));
-                if(rank != sender_rank)
-                new_bucket_to_particle[new_xbucket][new_ybucket].push_back(pid);
+//new method using hand-passing
 
+//#################### check corners!!!! ######################
+//and check these floors and ceils.... idk if they are accurate
+// printf("2: %f\n",read_timer()-temp);
+//     temp = read_timer();
+
+
+int num_to_send = 0;
+MPI_Request request;
+    for (int xbucket = max(0,x_offsets[rank]);  xbucket < min(bucket_dim,x_offsets[rank]+x_sizes[rank]); xbucket++)
+    {
+      int ybucket = y_offsets[rank];
+      for(int k = 0 ; k < bucket_to_particle[xbucket][ybucket].size(); k++){
+      particles_out[num_to_send] = particles[bucket_to_particle[xbucket][ybucket].at(k)];
+      particleid_out[num_to_send] = bucket_to_particle[xbucket][ybucket].at(k);
+
+      
+      num_to_send += 1;
+      }
+
+    }
+     for (int xbucket = max(0,x_offsets[rank]);  xbucket < min(bucket_dim,x_offsets[rank]+x_sizes[rank]); xbucket++)
+    {
+      int ybucket = y_offsets[rank]+y_sizes[rank]-1;
+      for(int k = 0 ; k < bucket_to_particle[xbucket][ybucket].size(); k++){
+      particles_out[num_to_send] = particles[bucket_to_particle[xbucket][ybucket].at(k)];
+      particleid_out[num_to_send] = bucket_to_particle[xbucket][ybucket].at(k);
+
+      
+      num_to_send += 1;
+      }
+
+    }   
+for (int ybucket = max(0,y_offsets[rank]+1);  ybucket < min(bucket_dim,y_offsets[rank]+y_sizes[rank]-1); ybucket++)
+    {
+      int xbucket = x_offsets[rank];
+      for(int k = 0 ; k < bucket_to_particle[xbucket][ybucket].size(); k++){
+      particles_out[num_to_send] = particles[bucket_to_particle[xbucket][ybucket].at(k)];
+      particleid_out[num_to_send] = bucket_to_particle[xbucket][ybucket].at(k);
+
+      
+      num_to_send += 1;
+      }
+
+    }
+for (int ybucket = max(0,y_offsets[rank]+1);  ybucket < min(bucket_dim,y_offsets[rank]+y_sizes[rank]-1); ybucket++)
+    {
+      int xbucket = x_offsets[rank]+x_sizes[rank]-1;
+      for(int k = 0 ; k < bucket_to_particle[xbucket][ybucket].size(); k++){
+      particles_out[num_to_send] = particles[bucket_to_particle[xbucket][ybucket].at(k)];
+      particleid_out[num_to_send] = bucket_to_particle[xbucket][ybucket].at(k);
+     
+      
+      num_to_send += 1;
+      }
+    }
+    // if(num_to_send > 0){
+    // printf("proc %d sending %d\n",rank,num_to_send);
+    // for(int i = 0; i < num_to_send; i++){
+    //   printf("%d ",particleid_out[i]);
+    // }
+    // printf("\n");
+    // }
+
+
+    for(int sender_proc = 0; sender_proc < n_proc; sender_proc ++){
+      if(rank == sender_proc){
+         std::vector<int> sent_to;
+        bool will_send = true;
+          
+           
+        for(int big_off = -1; big_off <= 1; big_off ++){
+          for(int little_off = -1; little_off <= 1; little_off ++){
+            will_send = true;
+            int receiver = rank+big_off*sqrt(n_proc)+little_off;
+           
+            if(0 <= receiver &&  receiver < n_proc && receiver != rank){
+               for (int i = 0; i < sent_to.size(); i++)
+            {
+              if (sent_to.at(i) == receiver)
+              {
+                will_send = false;
               }
             }
-            
-
-             ybucket = y_offsets[sender_rank]+y_sizes[sender_rank]-1;
-            for(int xbucket = x_offsets[sender_rank];  xbucket < x_offsets[sender_rank] + x_sizes[sender_rank]; xbucket++){
-              
-              int num_to_send = bucket_to_particle[xbucket][ybucket].size();
-              MPI_Bcast(&num_to_send,1,MPI_INT,sender_rank,MPI_COMM_WORLD);
-              for(int k = 0; k < num_to_send; k++){
-                int pid;
-                if(rank == sender_rank)
-                pid = bucket_to_particle[xbucket][ybucket].at(k);
-                MPI_Bcast(&pid,1,MPI_INT,sender_rank,MPI_COMM_WORLD);
-              MPI_Bcast(&particles[pid],1,PARTICLE,sender_rank,MPI_COMM_WORLD);
-              int new_xbucket = floor(particles[pid].x / (0.01));
-                int new_ybucket = floor(particles[pid].y / (0.01));
-                if(rank != sender_rank)
-                new_bucket_to_particle[new_xbucket][new_ybucket].push_back(pid);
-
-              }
+            if(will_send){
+              sent_to.push_back(receiver);
+              MPI_Send(&num_to_send, 1, MPI_INT, receiver, 0, MPI_COMM_WORLD);
+                MPI_Send(particles_out, num_to_send, PARTICLE, receiver, 0, MPI_COMM_WORLD);
+                MPI_Send(particleid_out, num_to_send, MPI_INT, receiver, 0, MPI_COMM_WORLD);
+                
             }
-
-            int xbucket = x_offsets[sender_rank];
-            for(int ybucket = y_offsets[sender_rank]+1;  ybucket < y_offsets[sender_rank] + y_sizes[sender_rank]-1; ybucket++){
-              
-              int num_to_send = bucket_to_particle[xbucket][ybucket].size();
-              MPI_Bcast(&num_to_send,1,MPI_INT,sender_rank,MPI_COMM_WORLD);
-              for(int k = 0; k < num_to_send; k++){
-                int pid;
-                if(rank == sender_rank)
-                pid = bucket_to_particle[xbucket][ybucket].at(k);
-                MPI_Bcast(&pid,1,MPI_INT,sender_rank,MPI_COMM_WORLD);
-              MPI_Bcast(&particles[pid],1,PARTICLE,sender_rank,MPI_COMM_WORLD);
-              int new_xbucket = floor(particles[pid].x / (0.01));
-                int new_ybucket = floor(particles[pid].y / (0.01));
-                if(rank != sender_rank)
-                new_bucket_to_particle[new_xbucket][new_ybucket].push_back(pid);
-
-              }
-            }
-
-             xbucket = x_offsets[sender_rank]+x_sizes[sender_rank]-1;
-
-            for(int ybucket = y_offsets[sender_rank]+1;  ybucket < y_offsets[sender_rank] + y_sizes[sender_rank]-1; ybucket++){
-              
-              int num_to_send = bucket_to_particle[xbucket][ybucket].size();
-              MPI_Bcast(&num_to_send,1,MPI_INT,sender_rank,MPI_COMM_WORLD);
-              for(int k = 0; k < num_to_send; k++){
-                int pid;
-                if(rank == sender_rank)
-                pid = bucket_to_particle[xbucket][ybucket].at(k);
-                MPI_Bcast(&pid,1,MPI_INT,sender_rank,MPI_COMM_WORLD);
-              MPI_Bcast(&particles[pid],1,PARTICLE,sender_rank,MPI_COMM_WORLD);
-              int new_xbucket = floor(particles[pid].x / (0.01));
-                int new_ybucket = floor(particles[pid].y / (0.01));
-                if(rank != sender_rank)
-                new_bucket_to_particle[new_xbucket][new_ybucket].push_back(pid);
-
-              }
             }
           }
- 
+        }
+      }
+      else{
+      if(rank - sender_proc == 1 || rank - sender_proc == -1 || rank-sender_proc-sqrt(n_proc) == 1 || rank-sender_proc-sqrt(n_proc) == 0 ||rank-sender_proc-sqrt(n_proc) == -1 ||rank-sender_proc+sqrt(n_proc) == 1 || rank-sender_proc+sqrt(n_proc) == 0 ||rank-sender_proc+sqrt(n_proc) == -1 ){
         
-// printf("4: %f\n",read_timer()-temp);
-//     temp = read_timer();
+       
+                int num_to_rec;
+                MPI_Recv(&num_to_rec, 1, MPI_INT, sender_proc, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                MPI_Recv(particles_in, num_to_rec, PARTICLE, sender_proc, 0, MPI_COMM_WORLD,MPI_STATUS_IGNORE);
+                MPI_Recv(particleid_in, num_to_rec, MPI_INT, sender_proc, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+         
+                for (int k = 0; k < num_to_rec; k++)
+                {
+                  
+                  int pid = particleid_in[k];
+                  //printf("%d %d %d \n",num_to_rec,k,pid);
+                  particles[pid] = particles_in[k];
+                  int new_xbucket = floor(particles[pid].x / (0.01));
+                  int new_ybucket = floor(particles[pid].y / (0.01));
+                  new_bucket_to_particle[new_xbucket][new_ybucket].push_back(pid);
+                
+                }
+
+      }}
+      
+    }
+    
+
+
 
 
 for(int xbucket = x_offsets[rank];  xbucket < x_offsets[rank] + x_sizes[rank]; xbucket++){
@@ -295,6 +344,7 @@ for(int xbucket = x_offsets[rank];  xbucket < x_offsets[rank] + x_sizes[rank]; x
       int new_xbucket = floor(particles[i].x / (0.01));
       int new_ybucket = floor(particles[i].y / (0.01));
       new_bucket_to_particle[new_xbucket][new_ybucket].push_back(i);
+      
     }
   }
 }
@@ -410,3 +460,7 @@ for(int xbucket = max(0,x_offsets[rank]-1);  xbucket < min(bucket_dim,x_offsets[
     
     return 0;
 }
+
+
+
+
